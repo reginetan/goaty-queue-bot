@@ -569,7 +569,6 @@ async def show_queue(interaction: discord.Interaction):
         embed.add_field(name="", value=f"*...and {len(queue_list) - 25} more*", inline=False)
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -583,13 +582,18 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 def run_health_server():
     port = int(os.getenv('PORT', 10000))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    print(f"Health check server running on port {port}")
     server.serve_forever()
 
 if __name__ == "__main__":
     # Start health check server in background thread
     health_thread = Thread(target=run_health_server, daemon=True)
     health_thread.start()
-    print("Health check server started")
+    print(f"Health check server started on port {os.getenv('PORT', 10000)}")
+    
+    # Give the health server a moment to start
+    import time
+    time.sleep(2)
     
     # Run the bot
     bot.run(BOT_TOKEN)
