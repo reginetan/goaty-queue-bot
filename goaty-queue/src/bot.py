@@ -205,7 +205,7 @@ class QueueView(discord.ui.View):
                 queues[guild_id]["update_task"] = None
             queues[guild_id]["timer_start"] = None
     
-    @discord.ui.button(label="Start Queue", style=discord.ButtonStyle.primary, custom_id="queue_start", row=1)
+    @discord.ui.button(label="🔒 Start Queue (Admin)", style=discord.ButtonStyle.primary, custom_id="queue_start", row=1)
     async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Check if user is admin
         if not interaction.user.guild_permissions.administrator:
@@ -247,7 +247,7 @@ class QueueView(discord.ui.View):
         else:
             await interaction.response.send_message("Queue started! Timer will begin when first person joins.", ephemeral=True)
     
-    @discord.ui.button(label="Stop Queue", style=discord.ButtonStyle.secondary, custom_id="queue_stop", row=1)
+    @discord.ui.button(label="🔒 Stop Queue (Admin)", style=discord.ButtonStyle.secondary, custom_id="queue_stop", row=1)
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Check if user is admin
         if not interaction.user.guild_permissions.administrator:
@@ -278,8 +278,7 @@ class QueueView(discord.ui.View):
             queues[guild_id]["update_task"] = None
         
         await update_queue_message(interaction.guild)
-        await interaction.channel.send("Queue stopped! No timers will run.")
-        await interaction.response.send_message("Queue stopped successfully.", ephemeral=True)
+        await interaction.response.send_message("Queue stopped successfully. No timers will run.", ephemeral=True)
 
 async def update_queue_message(guild: discord.Guild):
     """Update the queue embed message"""
