@@ -15,7 +15,7 @@ This project is a Discord bot designed for managing queues within a Discord serv
 1. Clone the repository:
    ```
    git clone https://github.com/reginetan/goaty-queue-bot.git
-   cd discord-queue-bot
+   cd goaty-queue-bot
    ```
 
 2. Create a virtual environment (optional but recommended):
@@ -32,6 +32,11 @@ This project is a Discord bot designed for managing queues within a Discord serv
 4. Create a `.env` file based on the `.env.example` template and add your bot token:
    ```
    DISCORD_TOKEN=your_bot_token_here
+   ```
+
+5. Run the project by using
+   ```
+   python start.py
    ```
 
 ## Commands
