@@ -76,9 +76,9 @@ async def start_timer(guild_id: int):
         # Notify that time expired
         removed_user = guild.get_member(removed_user_id)
         if removed_user:
-            await channel.send(f"{removed_user.mention}'s time expired (6 minutes)")
+            await channel.send(f"**{removed_user.name}**'s time expired (6 minutes)")
         else:
-            await channel.send(f"<@{removed_user_id}>'s time expired (6 minutes)")
+            await channel.send(f"User (ID: {removed_user_id})'s time expired (6 minutes)")
         
         # Update queue display
         await update_queue_message(guild)
@@ -527,13 +527,14 @@ async def next_in_queue(interaction: discord.Interaction):
         await interaction.response.send_message("Queue is empty!", ephemeral=True)
         return
     
-    next_user_id = queues[guild_id]["queue"].pop(0)
-    next_user = interaction.guild.get_member(next_user_id)
+    removed_user_id = queues[guild_id]["queue"].pop(0)
+    removed_user = interaction.guild.get_member(removed_user_id)
     
-    if next_user:
-        await interaction.response.send_message(f"{next_user.mention} **It's your turn!**")
+    # Notify who was removed (no ping)
+    if removed_user:
+        await interaction.response.send_message(f"**{removed_user.name}** has been removed from the queue.")
     else:
-        await interaction.response.send_message(f"<@{next_user_id}> **It's your turn!** (user left server)")
+        await interaction.response.send_message(f"User (ID: {removed_user_id}) has been removed from the queue.")
     
     await update_queue_message(interaction.guild)
     
@@ -583,7 +584,7 @@ async def remove_from_queue(interaction: discord.Interaction, user: discord.Memb
     
     queues[guild_id]["queue"].remove(user.id)
     await update_queue_message(interaction.guild)
-    await interaction.response.send_message(f"Removed {user.mention} from queue", ephemeral=True)
+    await interaction.response.send_message(f"Removed **{user.name}** from queue", ephemeral=True)
     
     # If the removed person was first, ping the new first person (only if queue is active)
     if was_first:
