@@ -25,11 +25,31 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-# Queue storage: {guild_id: {"queue": [user_ids], "message_id": int, "channel_id": int, "timer_task": Task, "timer_start": datetime, "is_active": bool}}
+# Queue storage: {guild_id: {"queue": [user_ids], "message_id": int, "channel_id": int, "timer_task": Task, "timer_start": datetime, "is_active": bool, "update_task": Task}}
 queues = {}
 
 # Timer duration in seconds (6 minutes = 360 seconds)
 TIMER_DURATION = 360
+
+async def update_timer_display(guild_id: int):
+    """Background task that updates the queue display every 5 seconds to show countdown"""
+    try:
+        while True:
+            await asyncio.sleep(5)  # Update every 5 seconds
+            
+            # Check if queue still exists and has people
+            if guild_id not in queues or not queues[guild_id]["queue"]:
+                continue
+            
+            # Get guild
+            guild = bot.get_guild(guild_id)
+            if not guild:
+                break
+            
+            # Update the queue message to show current timer
+            await update_queue_message(guild)
+    except asyncio.CancelledError:
+        pass
 
 async def start_timer(guild_id: int):
     """Start the 6-minute timer for the first person in queue"""
@@ -76,10 +96,19 @@ async def start_timer(guild_id: int):
             # Start timer for next person
             queues[guild_id]["timer_task"] = asyncio.create_task(start_timer(guild_id))
             queues[guild_id]["timer_start"] = datetime.now()
+            
+            # Start update task if not already running
+            if not queues[guild_id].get("update_task") or queues[guild_id]["update_task"].done():
+                queues[guild_id]["update_task"] = asyncio.create_task(update_timer_display(guild_id))
         else:
             # No one left in queue
             queues[guild_id]["timer_task"] = None
             queues[guild_id]["timer_start"] = None
+            
+            # Stop update task
+            if queues[guild_id].get("update_task"):
+                queues[guild_id]["update_task"].cancel()
+                queues[guild_id]["update_task"] = None
     except asyncio.CancelledError:
         # Timer was cancelled (queue cleared or person manually removed)
         pass
@@ -94,7 +123,7 @@ class QueueView(discord.ui.View):
         user_id = interaction.user.id
         
         if guild_id not in queues:
-            queues[guild_id] = {"queue": [], "message_id": None, "channel_id": None, "timer_task": None, "timer_start": None, "is_active": False}
+            queues[guild_id] = {"queue": [], "message_id": None, "channel_id": None, "timer_task": None, "timer_start": None, "is_active": False, "update_task": None}
         
         if user_id in queues[guild_id]["queue"]:
             await interaction.response.send_message("You're already in the queue!", ephemeral=True)
@@ -115,6 +144,10 @@ class QueueView(discord.ui.View):
             await interaction.channel.send(f"{interaction.user.mention} **It's your turn now!**")
             queues[guild_id]["timer_task"] = asyncio.create_task(start_timer(guild_id))
             queues[guild_id]["timer_start"] = datetime.now()
+            
+            # Start update task if not already running
+            if not queues[guild_id].get("update_task") or queues[guild_id]["update_task"].done():
+                queues[guild_id]["update_task"] = asyncio.create_task(update_timer_display(guild_id))
     
     @discord.ui.button(label="Leave Queue", style=discord.ButtonStyle.red, custom_id="queue_leave", row=0)
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -152,6 +185,10 @@ class QueueView(discord.ui.View):
                 # Restart timer for next person
                 queues[guild_id]["timer_task"] = asyncio.create_task(start_timer(guild_id))
                 queues[guild_id]["timer_start"] = datetime.now()
+                
+                # Start update task if not already running
+                if not queues[guild_id].get("update_task") or queues[guild_id]["update_task"].done():
+                    queues[guild_id]["update_task"] = asyncio.create_task(update_timer_display(guild_id))
             else:
                 queues[guild_id]["timer_task"] = None
                 queues[guild_id]["timer_start"] = None
@@ -160,6 +197,12 @@ class QueueView(discord.ui.View):
             if queues[guild_id].get("timer_task"):
                 queues[guild_id]["timer_task"].cancel()
             queues[guild_id]["timer_task"] = None
+            queues[guild_id]["timer_start"] = None
+            
+            # Stop update task
+            if queues[guild_id].get("update_task"):
+                queues[guild_id]["update_task"].cancel()
+                queues[guild_id]["update_task"] = None
             queues[guild_id]["timer_start"] = None
     
     @discord.ui.button(label="Start Queue", style=discord.ButtonStyle.primary, custom_id="queue_start", row=1)
@@ -196,6 +239,10 @@ class QueueView(discord.ui.View):
             queues[guild_id]["timer_task"] = asyncio.create_task(start_timer(guild_id))
             queues[guild_id]["timer_start"] = datetime.now()
             
+            # Start update task if not already running
+            if not queues[guild_id].get("update_task") or queues[guild_id]["update_task"].done():
+                queues[guild_id]["update_task"] = asyncio.create_task(update_timer_display(guild_id))
+            
             await interaction.response.send_message("Queue started! Timer begins for first person.", ephemeral=True)
         else:
             await interaction.response.send_message("Queue started! Timer will begin when first person joins.", ephemeral=True)
@@ -225,6 +272,11 @@ class QueueView(discord.ui.View):
         queues[guild_id]["timer_task"] = None
         queues[guild_id]["timer_start"] = None
         
+        # Stop update task
+        if queues[guild_id].get("update_task"):
+            queues[guild_id]["update_task"].cancel()
+            queues[guild_id]["update_task"] = None
+        
         await update_queue_message(interaction.guild)
         await interaction.channel.send("Queue stopped! No timers will run.")
         await interaction.response.send_message("Queue stopped successfully.", ephemeral=True)
@@ -251,9 +303,19 @@ async def update_queue_message(guild: discord.Guild):
     status_emoji = "🟢" if is_active else "🔴"
     status_text = "ACTIVE" if is_active else "STOPPED"
     
+    # Calculate remaining time if timer is active
+    timer_text = ""
+    if is_active and queue_list and queues[guild_id].get("timer_start"):
+        elapsed = (datetime.now() - queues[guild_id]["timer_start"]).total_seconds()
+        remaining = max(0, TIMER_DURATION - elapsed)
+        
+        minutes = int(remaining // 60)
+        seconds = int(remaining % 60)
+        timer_text = f"\n⏱️ **Time remaining:** {minutes}:{seconds:02d}"
+    
     embed = discord.Embed(
         title="Queue System",
-        description=f"{status_emoji} **Status:** {status_text}\n**Total in queue:** {len(queue_list)}",
+        description=f"{status_emoji} **Status:** {status_text}\n**Total in queue:** {len(queue_list)}{timer_text}",
         color=discord.Color.green() if is_active else discord.Color.red()
     )
     
@@ -261,10 +323,20 @@ async def update_queue_message(guild: discord.Guild):
         queue_text = ""
         for idx, user_id in enumerate(queue_list[:10], 1):  # Show top 10
             user = guild.get_member(user_id)
+            
+            # Add timer indicator for the first person
+            timer_indicator = ""
+            if idx == 1 and is_active and queues[guild_id].get("timer_start"):
+                elapsed = (datetime.now() - queues[guild_id]["timer_start"]).total_seconds()
+                remaining = max(0, TIMER_DURATION - elapsed)
+                minutes = int(remaining // 60)
+                seconds = int(remaining % 60)
+                timer_indicator = f" ⏱️ `{minutes}:{seconds:02d}`"
+            
             if user:
-                queue_text += f"**{idx}.** {user.mention}\n"
+                queue_text += f"**{idx}.** {user.mention}{timer_indicator}\n"
             else:
-                queue_text += f"**{idx}.** <@{user_id}> (left server)\n"
+                queue_text += f"**{idx}.** <@{user_id}> (left server){timer_indicator}\n"
         
         embed.add_field(name="Current Queue", value=queue_text, inline=False)
         
@@ -320,7 +392,7 @@ async def setup_queue(interaction: discord.Interaction):
     
     guild_id = interaction.guild_id
     if guild_id not in queues:
-        queues[guild_id] = {"queue": [], "message_id": None, "channel_id": None, "timer_task": None, "timer_start": None, "is_active": False}
+        queues[guild_id] = {"queue": [], "message_id": None, "channel_id": None, "timer_task": None, "timer_start": None, "is_active": False, "update_task": None}
     
     queues[guild_id]["message_id"] = message.id
     queues[guild_id]["channel_id"] = interaction.channel_id
@@ -358,6 +430,10 @@ async def start_queue_cmd(interaction: discord.Interaction):
         queues[guild_id]["timer_task"] = asyncio.create_task(start_timer(guild_id))
         queues[guild_id]["timer_start"] = datetime.now()
         
+        # Start update task if not already running
+        if not queues[guild_id].get("update_task") or queues[guild_id]["update_task"].done():
+            queues[guild_id]["update_task"] = asyncio.create_task(update_timer_display(guild_id))
+        
         await interaction.response.send_message("Queue started! Timer begins for first person.", ephemeral=True)
     else:
         await interaction.response.send_message("Queue started! Timer will begin when first person joins.", ephemeral=True)
@@ -384,6 +460,12 @@ async def stop_queue_cmd(interaction: discord.Interaction):
     queues[guild_id]["timer_task"] = None
     queues[guild_id]["timer_start"] = None
     
+    # Stop update task
+    if queues[guild_id].get("update_task"):
+        queues[guild_id]["update_task"].cancel()
+        queues[guild_id]["update_task"] = None
+    
+    await update_queue_message(interaction.guild)
     await interaction.channel.send("Queue stopped! No timers will run.")
     await interaction.response.send_message("Queue stopped successfully.", ephemeral=True)
 
@@ -404,6 +486,11 @@ async def clear_queue(interaction: discord.Interaction):
         queues[guild_id]["timer_task"].cancel()
     queues[guild_id]["timer_task"] = None
     queues[guild_id]["timer_start"] = None
+    
+    # Stop update task
+    if queues[guild_id].get("update_task"):
+        queues[guild_id]["update_task"].cancel()
+        queues[guild_id]["update_task"] = None
     
     await update_queue_message(interaction.guild)
     await interaction.response.send_message("Queue cleared!", ephemeral=True)
@@ -444,10 +531,19 @@ async def next_in_queue(interaction: discord.Interaction):
         
         queues[guild_id]["timer_task"] = asyncio.create_task(start_timer(guild_id))
         queues[guild_id]["timer_start"] = datetime.now()
+        
+        # Start update task if not already running
+        if not queues[guild_id].get("update_task") or queues[guild_id]["update_task"].done():
+            queues[guild_id]["update_task"] = asyncio.create_task(update_timer_display(guild_id))
     else:
         # Queue is empty or inactive, clear timer
         queues[guild_id]["timer_task"] = None
         queues[guild_id]["timer_start"] = None
+        
+        # Stop update task
+        if queues[guild_id].get("update_task"):
+            queues[guild_id]["update_task"].cancel()
+            queues[guild_id]["update_task"] = None
 
 @bot.tree.command(name="remove", description="[ADMIN] Remove a user from queue")
 @app_commands.describe(user="The user to remove from queue")
@@ -485,10 +581,19 @@ async def remove_from_queue(interaction: discord.Interaction, user: discord.Memb
             # Restart timer for next person
             queues[guild_id]["timer_task"] = asyncio.create_task(start_timer(guild_id))
             queues[guild_id]["timer_start"] = datetime.now()
+            
+            # Start update task if not already running
+            if not queues[guild_id].get("update_task") or queues[guild_id]["update_task"].done():
+                queues[guild_id]["update_task"] = asyncio.create_task(update_timer_display(guild_id))
         else:
             # Queue is empty or inactive, clear timer
             queues[guild_id]["timer_task"] = None
             queues[guild_id]["timer_start"] = None
+            
+            # Stop update task
+            if queues[guild_id].get("update_task"):
+                queues[guild_id]["update_task"].cancel()
+                queues[guild_id]["update_task"] = None
 
 @bot.tree.command(name="move", description="[ADMIN] Move a user to a specific position")
 @app_commands.describe(user="The user to move", position="New position (1 = front)")
@@ -522,6 +627,10 @@ async def move_in_queue(interaction: discord.Interaction, user: discord.Member, 
         await interaction.channel.send(f"{user.mention} **It's your turn now!**")
         queues[guild_id]["timer_task"] = asyncio.create_task(start_timer(guild_id))
         queues[guild_id]["timer_start"] = datetime.now()
+        
+        # Start update task if not already running
+        if not queues[guild_id].get("update_task") or queues[guild_id]["update_task"].done():
+            queues[guild_id]["update_task"] = asyncio.create_task(update_timer_display(guild_id))
 
 @bot.tree.command(name="queue_info", description="Check your position in queue")
 async def queue_info(interaction: discord.Interaction):
