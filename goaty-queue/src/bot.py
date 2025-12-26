@@ -380,6 +380,29 @@ async def on_ready():
 @app_commands.checks.has_permissions(administrator=True)
 async def setup_queue(interaction: discord.Interaction):
     """Admin command to create the queue panel"""
+    guild_id = interaction.guild_id
+    
+    # If a queue already exists, clean it up first
+    if guild_id in queues:
+        # Cancel any running timers
+        if queues[guild_id].get("timer_task"):
+            queues[guild_id]["timer_task"].cancel()
+        if queues[guild_id].get("update_task"):
+            queues[guild_id]["update_task"].cancel()
+        
+        # Try to delete the old queue message
+        if queues[guild_id].get("message_id") and queues[guild_id].get("channel_id"):
+            try:
+                channel = interaction.guild.get_channel(queues[guild_id]["channel_id"])
+                if channel:
+                    old_message = await channel.fetch_message(queues[guild_id]["message_id"])
+                    await old_message.delete()
+            except:
+                pass  # Message might already be deleted
+        
+        # Clear the old queue data
+        queues[guild_id] = {"queue": [], "message_id": None, "channel_id": None, "timer_task": None, "timer_start": None, "is_active": False, "update_task": None}
+    
     embed = discord.Embed(
         title="Queue System",
         description="**Total in queue:** 0",
@@ -390,7 +413,6 @@ async def setup_queue(interaction: discord.Interaction):
     view = QueueView()
     message = await interaction.channel.send(embed=embed, view=view)
     
-    guild_id = interaction.guild_id
     if guild_id not in queues:
         queues[guild_id] = {"queue": [], "message_id": None, "channel_id": None, "timer_task": None, "timer_start": None, "is_active": False, "update_task": None}
     
