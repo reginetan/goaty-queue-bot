@@ -227,18 +227,18 @@ async def update_queue_message(guild: discord.Guild):
     status_text = "ACTIVE" if is_active else "STOPPED"
     
     # Calculate remaining time if timer is active
-    timer_text = ""
+    timer_text = f"\n**Time per person:** 6 minutes"
     if is_active and queue_list and queues[guild_id].get("timer_start"):
         elapsed = (datetime.now() - queues[guild_id]["timer_start"]).total_seconds()
         remaining = max(0, TIMER_DURATION - elapsed)
         
         minutes = int(remaining // 60)
         seconds = int(remaining % 60)
+        timer_text += f"\n**Time remaining:** {minutes}:{seconds:02d}"
     
     embed = discord.Embed(
         title="Queue System",
         description=f"**Status:** {status_text}\n**Total in queue:** {len(queue_list)}{timer_text}",
-        timer_text = f"\n**Time per person:** 6 minutes",
         color=discord.Color.green() if is_active else discord.Color.red()
     )
     
@@ -316,6 +316,9 @@ async def setup_queue(interaction: discord.Interaction):
     """Admin command to create the queue panel"""
     guild_id = interaction.guild_id
     
+    # Respond to interaction first to prevent timeout
+    await interaction.response.send_message("Creating queue panel...", ephemeral=True)
+    
     # If a queue already exists, clean it up first
     if guild_id in queues:
         # Cancel any running timers
@@ -333,10 +336,11 @@ async def setup_queue(interaction: discord.Interaction):
                     await old_message.delete()
             except:
                 pass  # Message might already be deleted
-        
-        # Clear the old queue data
-        queues[guild_id] = {"queue": [], "message_id": None, "channel_id": None, "timer_task": None, "timer_start": None, "is_active": False, "update_task": None}
     
+    # Initialize or reset queue data
+    queues[guild_id] = {"queue": [], "message_id": None, "channel_id": None, "timer_task": None, "timer_start": None, "is_active": False, "update_task": None}
+    
+    # Create the new queue panel
     embed = discord.Embed(
         title="Queue System",
         description="**Total in queue:** 0",
@@ -347,14 +351,13 @@ async def setup_queue(interaction: discord.Interaction):
     view = QueueView()
     message = await interaction.channel.send(embed=embed, view=view)
     
-    if guild_id not in queues:
-        queues[guild_id] = {"queue": [], "message_id": None, "channel_id": None, "timer_task": None, "timer_start": None, "is_active": False, "update_task": None}
-    
+    # Store the message info
     queues[guild_id]["message_id"] = message.id
     queues[guild_id]["channel_id"] = interaction.channel_id
     queues[guild_id]["is_active"] = False  # Queue starts inactive
     
-    await interaction.response.send_message("Queue panel created! Use `/start_queue` to begin accepting people.", ephemeral=True)
+    # Update the ephemeral response
+    await interaction.edit_original_response(content="Queue panel created! Use `/start_queue` to begin accepting people.")
 
 @bot.tree.command(name="start_queue", description="[ADMIN] Start the queue and begin timers")
 @app_commands.checks.has_permissions(administrator=True)
@@ -605,77 +608,32 @@ async def queue_info(interaction: discord.Interaction):
 
 @bot.tree.command(name="show_queue", description="Show the current queue list")
 async def show_queue(interaction: discord.Interaction):
-    """Display the current queue with interactive buttons"""
+    """Display information about the current queue"""
     guild_id = interaction.guild_id
     
     if guild_id not in queues:
         await interaction.response.send_message("No queue exists! Use `/goaty` to create one.", ephemeral=True)
         return
     
-    # Get current queue state
     queue_list = queues[guild_id]["queue"]
-    is_active = queues[guild_id].get("is_active", False)
     
-    status_text = "ACTIVE" if is_active else "STOPPED"
+    if not queue_list:
+        await interaction.response.send_message("The queue is currently empty.", ephemeral=True)
+        return
     
-    # Calculate remaining time if timer is active
-    timer_text = ""
-    if is_active and queue_list and queues[guild_id].get("timer_start"):
-        elapsed = (datetime.now() - queues[guild_id]["timer_start"]).total_seconds()
-        remaining = max(0, TIMER_DURATION - elapsed)
-        
-        minutes = int(remaining // 60)
-        seconds = int(remaining % 60)
-        timer_text = f"\n**Time remaining:** {minutes}:{seconds:02d}"
+    # Build a simple list showing positions
+    response = f"**Current Queue ({len(queue_list)} people):**\n"
+    for idx, user_id in enumerate(queue_list[:25], 1):  # Show up to 25
+        user = interaction.guild.get_member(user_id)
+        if user:
+            response += f"{idx}. {user.mention}\n"
+        else:
+            response += f"{idx}. <@{user_id}>\n"
     
-    embed = discord.Embed(
-        title="Queue System",
-        description=f"**Status:** {status_text}\n**Total in queue:** {len(queue_list)}{timer_text}",
-        color=discord.Color.green() if is_active else discord.Color.red()
-    )
+    if len(queue_list) > 25:
+        response += f"\n*...and {len(queue_list) - 25} more*"
     
-    if queue_list:
-        queue_text = ""
-        for idx, user_id in enumerate(queue_list[:10], 1):  # Show top 10
-            user = interaction.guild.get_member(user_id)
-            
-            # Calculate wait time and timer for each person
-            wait_info = ""
-            if is_active and queues[guild_id].get("timer_start"):
-                if idx == 1:
-                    # First person - show remaining time
-                    elapsed = (datetime.now() - queues[guild_id]["timer_start"]).total_seconds()
-                    remaining = max(0, TIMER_DURATION - elapsed)
-                    minutes = int(remaining // 60)
-                    seconds = int(remaining % 60)
-                    wait_info = f" - `{minutes}:{seconds:02d} remaining`"
-                else:
-                    # Other people - show estimated wait time
-                    elapsed = (datetime.now() - queues[guild_id]["timer_start"]).total_seconds()
-                    current_remaining = max(0, TIMER_DURATION - elapsed)
-                    # Each person before them has their full timer duration, except the first person
-                    estimated_wait = current_remaining + ((idx - 2) * TIMER_DURATION)
-                    wait_minutes = int(estimated_wait // 60)
-                    wait_seconds = int(estimated_wait % 60)
-                    wait_info = f" - `~{wait_minutes}:{wait_seconds:02d} wait`"
-            
-            if user:
-                queue_text += f"**{idx}.** {user.mention}{wait_info}\n"
-            else:
-                queue_text += f"**{idx}.** <@{user_id}> (left server){wait_info}\n"
-        
-        embed.add_field(name="Current Queue", value=queue_text, inline=False)
-        
-        if len(queue_list) > 10:
-            embed.add_field(name="", value=f"*...and {len(queue_list) - 10} more*", inline=False)
-    else:
-        embed.add_field(name="Current Queue", value="*Queue is empty*", inline=False)
-    
-    # Create view with interactive buttons
-    view = QueueView()
-    
-    # Send as public message (not ephemeral)
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.response.send_message(response, ephemeral=True)
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
